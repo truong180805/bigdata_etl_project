@@ -1,0 +1,27 @@
+# Bộ nhớ đệm của Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Môi trường ảo Python (Virtual Environment)
+venv/
+.venv/
+env/
+
+# Tệp rác của hệ điều hành và Trình soạn thảo (IDE)
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Tệp sinh ra từ Airflow (tránh đẩy log và cấu hình cục bộ lên Git)
+logs/
+airflow.cfg
+airflow.db
+webserver_config.py
+
+# Dữ liệu cục bộ và Biến môi trường chứa mật khẩu
+*.csv
+*.json
+*.log
+.env
