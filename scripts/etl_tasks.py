@@ -8,8 +8,8 @@ from datetime import datetime
 # Cấu hình kết nối DB (Dùng 'localhost' khi bạn chạy test trên máy cá nhân)
 # LƯU Ý CHO THÀNH VIÊN B: Khi ghép vào Airflow (chạy trong Docker), 
 # hãy đổi 'localhost' thành tên service container là 'postgres' nhé.
-SOURCE_DB = {'dbname': 'source_db', 'user': 'airflow', 'password': 'airflow', 'host': 'localhost', 'port': '5432'}
-WAREHOUSE_DB = {'dbname': 'warehouse_db', 'user': 'airflow', 'password': 'airflow', 'host': 'localhost', 'port': '5432'}
+SOURCE_DB = {'dbname': 'source_db', 'user': 'airflow', 'password': 'airflow', 'host': 'postgres', 'port': '5432'}
+WAREHOUSE_DB = {'dbname': 'warehouse_db', 'user': 'airflow', 'password': 'airflow', 'host': 'postgres', 'port': '5432'}
 
 def extract_data(logical_date_str):
     """
@@ -104,11 +104,27 @@ def load_data(valid_data, invalid_data):
 
     # 2. Nạp dữ liệu lỗi vào quarantine_orders
     if invalid_data:
+        # Xóa các bản ghi lỗi cũ có cùng id để tránh bị trùng khi chạy lại DAG
+        invalid_ids = [row[0] for row in invalid_data if row[0] is not None]
+
+        if invalid_ids:
+            cur.execute(
+                "DELETE FROM quarantine_orders WHERE id = ANY(%s)",
+                (invalid_ids,)
+            )
+
         insert_error_query = """
-            INSERT INTO quarantine_orders (id, user_id, amount, status, event_time, updated_at, error_reason, processing_time)
+            INSERT INTO quarantine_orders
+            (id, user_id, amount, status, event_time, updated_at, error_reason, processing_time)
             VALUES %s
         """
-        psycopg2.extras.execute_values(cur, insert_error_query, invalid_data)
+
+        psycopg2.extras.execute_values(
+            cur,
+            insert_error_query,
+            invalid_data
+        )
+
         print(f"Đã nạp {len(invalid_data)} bản ghi lỗi vào khu vực cách ly.")
 
     conn.commit()

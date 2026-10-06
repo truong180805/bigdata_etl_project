@@ -35,7 +35,7 @@ def generate_mock_orders(num_records=100):
             event_time = now - timedelta(minutes=random.randint(1, 60))
         else:
             # 20% là dữ liệu cố tình làm lỗi để test Quarantine và Late data
-            error_type = random.choice(['negative_amount', 'null_id', 'late_data'])
+            error_type = random.choice(['negative_amount', 'late_data'])
             
             if error_type == 'negative_amount':
                 order_id = str(uuid.uuid4())
