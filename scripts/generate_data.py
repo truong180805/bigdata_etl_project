@@ -96,7 +96,7 @@ if __name__ == "__main__":
     print("Bắt đầu sinh dữ liệu giả lập...")
     
     # Bước 1: Sinh ra 100 đơn hàng
-    mock_data = generate_mock_orders(100)
+    mock_data = generate_mock_orders(1000)
     
     # Bước 2: Đẩy dữ liệu vào Database
     insert_to_source_db(mock_data)
