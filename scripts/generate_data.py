@@ -1,102 +1,259 @@
+
 # File: scripts/generate_data.py
-# Mục đích: Sinh dữ liệu đơn hàng giả lập và nạp vào source_db
+# Sinh dữ liệu giả lập để kiểm thử ETL Pipeline
 
-import uuid
+import argparse
+import os
 import random
+import uuid
 from datetime import datetime, timedelta
-from faker import Faker
+
 import psycopg2
-import psycopg2.extras
+from psycopg2.extras import execute_values
 
-# Khởi tạo công cụ sinh dữ liệu ngẫu nhiên
-fake = Faker()
 
-# Cấu hình kết nối DB
-# Vì bạn đang chạy code trên máy tính cá nhân để test, host sẽ là 'localhost'
 DB_CONFIG = {
-    'dbname': 'source_db',
-    'user': 'airflow',
-    'password': 'airflow',
-    'host': 'localhost',
-    'port': '5432'
+    "dbname": os.getenv("SOURCE_DB_NAME", "source_db"),
+    "user": os.getenv("DB_USER", "airflow"),
+    "password": os.getenv("DB_PASSWORD", "airflow"),
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": os.getenv("DB_PORT", "5432"),
 }
 
-def generate_mock_orders(num_records=100):
-    """Hàm tạo ra danh sách các đơn hàng ngẫu nhiên"""
-    orders = []
+VALID_STATUSES = ["PENDING", "COMPLETED", "CANCELLED"]
+
+
+def generate_mock_orders(
+    num_records=100,
+    mode="mixed",
+    historical_date=None,
+):
+    """Sinh danh sách đơn hàng, không ghi vào database."""
+
+    if num_records <= 0:
+        raise ValueError("num_records phải lớn hơn 0")
+
+    valid_modes = [
+        "normal",
+        "mixed",
+        "invalid",
+        "late",
+        "historical",
+    ]
+
+    if mode not in valid_modes:
+        raise ValueError(f"Mode không hợp lệ: {mode}")
+
     now = datetime.now()
+    orders = []
 
-    for _ in range(num_records):
-        # 80% là dữ liệu hoàn toàn hợp lệ
-        if random.random() < 0.8:
-            order_id = str(uuid.uuid4())
-            amount = round(random.uniform(10.0, 500.0), 2)
-            # Giả lập thời gian mua hàng là từ 1 đến 60 phút trước
-            event_time = now - timedelta(minutes=random.randint(1, 60))
-        else:
-            # 20% là dữ liệu cố tình làm lỗi để test Quarantine và Late data
-            error_type = random.choice(['negative_amount', 'late_data'])
-            
-            if error_type == 'negative_amount':
-                order_id = str(uuid.uuid4())
-                amount = round(random.uniform(-100.0, -1.0), 2) # Cố tình cho tiền âm
-                event_time = now - timedelta(minutes=random.randint(1, 60))
-                
-            elif error_type == 'null_id':
-                order_id = None # Cố tình bỏ trống ID
-                amount = round(random.uniform(10.0, 500.0), 2)
-                event_time = now - timedelta(minutes=random.randint(1, 60))
-                
-            elif error_type == 'late_data':
-                order_id = str(uuid.uuid4())
-                amount = round(random.uniform(10.0, 500.0), 2)
-                # Dữ liệu muộn: Khách mua từ 5 ngày trước nhưng giờ hệ thống mới nhận được
-                event_time = now - timedelta(days=5)
+    if mode == "historical":
+        if not historical_date:
+            raise ValueError(
+                "historical cần tham số --date YYYY-MM-DD"
+            )
 
+        target_date = datetime.strptime(
+            historical_date, "%Y-%m-%d"
+        )
+
+        if target_date.date() > now.date():
+            raise ValueError(
+                "Không sử dụng ngày tương lai cho historical"
+            )
+
+    # Tạo dữ liệu với số lượng chính xác theo từng loại
+    if mode == "mixed":
+        invalid_count = num_records // 5
+        late_count = num_records // 10
+        normal_count = num_records - invalid_count - late_count
+
+        record_types = (
+            ["normal"] * normal_count
+            + ["invalid"] * invalid_count
+            + ["late"] * late_count
+        )
+
+        random.shuffle(record_types)
+
+    else:
+        record_types = [mode] * num_records
+
+    for record_type in record_types:
+
+        order_id = str(uuid.uuid4())
         user_id = str(random.randint(1, 1000))
-        status = random.choice(['PENDING', 'COMPLETED', 'CANCELLED'])
-        updated_at = now # Thời gian bản ghi được tạo vào hệ thống luôn là hiện tại
+        amount = round(random.uniform(10, 500), 2)
+        status = random.choice(VALID_STATUSES)
 
-        # Gom nhóm thành một dòng dữ liệu (Tuple)
-        orders.append((order_id, user_id, amount, status, event_time, updated_at))
+        event_time = now - timedelta(
+            minutes=random.randint(1, 60)
+        )
+        updated_at = now
+
+        if record_type == "invalid":
+            # Lỗi có chủ đích: số tiền âm
+            amount = -round(random.uniform(1, 100), 2)
+
+        elif record_type == "late":
+            # Đơn phát sinh 5 ngày trước,
+            # nhưng mới cập nhật vào hệ thống hôm nay
+            event_time = now - timedelta(days=5)
+
+        elif record_type == "historical":
+            # Dữ liệu thuộc ngày lịch sử để Backfill
+            offset = timedelta(
+                hours=random.randint(0, 22),
+                minutes=random.randint(0, 59),
+            )
+
+            event_time = target_date + offset
+            updated_at = event_time + timedelta(minutes=1)
+
+        orders.append((
+            order_id,
+            user_id,
+            amount,
+            status,
+            event_time,
+            updated_at,
+        ))
 
     return orders
 
+
 def insert_to_source_db(orders):
-    """Hàm kết nối DB và đẩy dữ liệu vào bảng"""
+    """Ghi dữ liệu vào source_db.orders."""
+
+    if not orders:
+        print("Không có dữ liệu cần chèn.")
+        return 0
+
     conn = None
+
     try:
-        # Mở kết nối đến database
         conn = psycopg2.connect(**DB_CONFIG)
-        cur = conn.cursor()
 
-        # Câu lệnh SQL chèn dữ liệu
-        insert_query = """
-            INSERT INTO orders (id, user_id, amount, status, event_time, updated_at)
-            VALUES %s
-        """
+        with conn.cursor() as cur:
+            query = """
+                INSERT INTO orders (
+                    id,
+                    user_id,
+                    amount,
+                    status,
+                    event_time,
+                    updated_at
+                )
+                VALUES %s
+            """
 
-        # Dùng execute_values để chèn nhiều dòng cùng lúc. 
-        # Điều này giúp tiết kiệm RAM và CPU hơn rất nhiều so với vòng lặp INSERT từng dòng.
-        psycopg2.extras.execute_values(cur, insert_query, orders)
+            execute_values(
+                cur,
+                query,
+                orders,
+                page_size=1000,
+            )
 
-        # Lưu thay đổi (Commit)
         conn.commit()
-        print(f"Thành công: Đã chèn {len(orders)} đơn hàng vào source_db!")
 
-    except Exception as e:
-        print(f"Thất bại: Đã xảy ra lỗi khi chèn dữ liệu - {e}")
-    finally:
-        # Luôn luôn nhớ đóng kết nối để giải phóng RAM
+        print(
+            f"Thành công: Đã chèn {len(orders)} "
+            "đơn hàng vào source_db!"
+        )
+
+        return len(orders)
+
+    except Exception:
         if conn:
-            cur.close()
+            conn.rollback()
+        raise
+
+    finally:
+        if conn:
             conn.close()
 
+
+def print_summary(orders):
+    """Thống kê dữ liệu đã sinh."""
+
+    total = len(orders)
+
+    invalid = sum(
+        1 for row in orders
+        if row[2] is None or row[2] < 0
+    )
+
+    late = sum(
+        1 for row in orders
+        if (row[5] - row[4]).total_seconds()
+        >= 24 * 3600
+    )
+
+    print("\n===== DATA GENERATION SUMMARY =====")
+    print(f"Total records : {total}")
+    print(f"Valid records : {total - invalid}")
+    print(f"Invalid records: {invalid}")
+    print(f"Late records  : {late}")
+    print("===================================\n")
+
+
 if __name__ == "__main__":
-    print("Bắt đầu sinh dữ liệu giả lập...")
-    
-    # Bước 1: Sinh ra 100 đơn hàng
-    mock_data = generate_mock_orders(1000)
-    
-    # Bước 2: Đẩy dữ liệu vào Database
-    insert_to_source_db(mock_data)
+
+    parser = argparse.ArgumentParser(
+        description="Sinh dữ liệu kiểm thử ETL"
+    )
+
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=100,
+        help="Số lượng bản ghi",
+    )
+
+    parser.add_argument(
+        "--mode",
+        choices=[
+            "normal",
+            "mixed",
+            "invalid",
+            "late",
+            "historical",
+        ],
+        default="mixed",
+    )
+
+    parser.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help="Ngày dữ liệu lịch sử YYYY-MM-DD",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Chỉ sinh và kiểm tra, không ghi database",
+    )
+
+    args = parser.parse_args()
+
+    if args.count <= 0:
+        parser.error("--count phải lớn hơn 0")
+
+    if args.mode == "historical" and not args.date:
+        parser.error(
+            "Chế độ historical yêu cầu --date"
+        )
+
+    orders = generate_mock_orders(
+        num_records=args.count,
+        mode=args.mode,
+        historical_date=args.date,
+    )
+
+    print_summary(orders)
+
+    if args.dry_run:
+        print("DRY RUN: Không ghi dữ liệu vào database.")
+    else:
+        insert_to_source_db(orders)
