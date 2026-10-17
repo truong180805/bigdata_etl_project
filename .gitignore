@@ -25,3 +25,7 @@ webserver_config.py
 *.json
 *.log
 .env
+
+# Database backup
+backups/
+*.dump
