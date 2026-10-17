@@ -27,3 +27,9 @@ CREATE TABLE IF NOT EXISTS quarantine_orders (
     error_reason TEXT,                -- Lý do bị từ chối (VD: 'Negative amount', 'Null ID')
     processing_time TIMESTAMP         -- Thời gian phát hiện lỗi
 );
+-- Bang theo doi trang thai Incremental ETL
+CREATE TABLE IF NOT EXISTS etl_checkpoint (
+    pipeline_name VARCHAR(100) PRIMARY KEY,
+    last_successful_updated_at TIMESTAMP,
+    last_run_at TIMESTAMP
+);

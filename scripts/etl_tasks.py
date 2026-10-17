@@ -11,7 +11,82 @@ from datetime import datetime
 SOURCE_DB = {'dbname': 'source_db', 'user': 'airflow', 'password': 'airflow', 'host': 'postgres', 'port': '5432'}
 WAREHOUSE_DB = {'dbname': 'warehouse_db', 'user': 'airflow', 'password': 'airflow', 'host': 'postgres', 'port': '5432'}
 
-def extract_data(logical_date_str):
+PIPELINE_NAME = "orders_incremental_etl"
+
+
+def get_checkpoint():
+    """
+    Đọc thời điểm cập nhật cuối cùng đã ETL thành công.
+    Nếu chưa có checkpoint, trả về None để chạy lần đầu.
+    """
+    conn = psycopg2.connect(**WAREHOUSE_DB)
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT last_successful_updated_at
+                FROM etl_checkpoint
+                WHERE pipeline_name = %s
+                """,
+                (PIPELINE_NAME,)
+            )
+
+            result = cur.fetchone()
+
+            return result[0] if result else None
+
+    finally:
+        conn.close()
+
+def extract_data(logical_date_str=None):
+    """
+    Incremental Extract:
+    - Lần đầu: lấy toàn bộ dữ liệu.
+    - Các lần sau: chỉ lấy bản ghi mới hoặc được cập nhật
+      kể từ checkpoint.
+    """
+    checkpoint = get_checkpoint()
+
+    print(f"Bắt đầu Extract. Checkpoint hiện tại: {checkpoint}")
+
+    conn = psycopg2.connect(**SOURCE_DB)
+
+    try:
+        with conn.cursor(
+            cursor_factory=psycopg2.extras.DictCursor
+        ) as cur:
+
+            if checkpoint is None:
+                query = """
+                    SELECT id, user_id, amount, status,
+                           event_time, updated_at
+                    FROM orders
+                    ORDER BY updated_at, id
+                """
+                cur.execute(query)
+
+            else:
+                query = """
+                    SELECT id, user_id, amount, status,
+                           event_time, updated_at
+                    FROM orders
+                    WHERE updated_at >= %s
+                    ORDER BY updated_at, id
+                """
+                cur.execute(query, (checkpoint,))
+
+            raw_records = cur.fetchall()
+
+        print(
+            f"Đã trích xuất {len(raw_records)} "
+            "bản ghi từ source_db."
+        )
+
+        return raw_records
+
+    finally:
+        conn.close()
     """
     Trích xuất dữ liệu tăng dần (Incremental). 
     Chỉ lấy những đơn hàng có ngày cập nhật (updated_at) trùng với logical_date.
