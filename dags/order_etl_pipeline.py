@@ -40,5 +40,10 @@ with DAG(
                 "{{ dag_run.conf.get('backfill', false) "
                 "if dag_run and dag_run.conf else false }}"
             ),
+            "test_retry": (
+                "{{ dag_run.conf.get('test_retry', false) "
+                "if dag_run and dag_run.conf else false }}"
+            ),
+            "attempt_number": "{{ ti.try_number }}",
         },
     )

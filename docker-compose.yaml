@@ -12,6 +12,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: 2
     AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: 1
 
+    AIRFLOW__WEBSERVER__SECRET_KEY: "bigdata_etl_shared_secret_key_2026"
+
     DB_HOST: postgres
 
   volumes:
