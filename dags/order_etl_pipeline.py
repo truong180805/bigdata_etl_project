@@ -4,7 +4,6 @@ import sys
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-# Cho Airflow tìm thấy file scripts/etl_tasks.py
 sys.path.append("/opt/airflow/scripts")
 
 from etl_tasks import run_etl_pipeline
@@ -19,21 +18,27 @@ default_args = {
 
 with DAG(
     dag_id="order_etl_pipeline",
-    description="Pipeline ETL/ELT xử lý dữ liệu đơn hàng thương mại điện tử",
+    description="ETL don hang: Incremental, Backfill, Retry, Quarantine",
     default_args=default_args,
     start_date=datetime(2026, 1, 1),
     schedule="@daily",
     catchup=False,
     max_active_runs=1,
     tags=["etl", "ecommerce", "bigdata"],
+    render_template_as_native_obj=True,
 ) as dag:
 
     run_etl = PythonOperator(
         task_id="run_etl",
         python_callable=run_etl_pipeline,
         op_kwargs={
-            "logical_date_str": "{{ ds }}"
+            "logical_date_str": (
+                "{{ dag_run.conf.get('backfill_date', ds) "
+                "if dag_run and dag_run.conf else ds }}"
+            ),
+            "backfill": (
+                "{{ dag_run.conf.get('backfill', false) "
+                "if dag_run and dag_run.conf else false }}"
+            ),
         },
     )
-
-    run_etl
